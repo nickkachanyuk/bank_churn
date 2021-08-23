@@ -1,0 +1,129 @@
+---
+title: "group project 2"
+author: "group 5"
+date: "4/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(fastDummies)
+library(caret)
+
+bank <- read_rds("~/Data Science/Classes/DS 504/BankChurners.rds")
+
+bank <- bank %>% mutate(Churn = as.factor(Churn))
+
+```
+
+## Feature Engineering
+
+```{r}
+bank1 <- bank %>% mutate(
+  log_Credit_Limit = log(Credit_Limit),
+  log_Avg_Open_To_Buy = log(Avg_Open_To_Buy),
+  log_Total_Trans_Amt = log(Total_Trans_Amt),
+  log_Total_Trans_Ct = log(Total_Trans_Ct),
+  trans_amt_by_count = Total_Trans_Amt/Total_Trans_Ct) %>%
+  select(-c(Credit_Limit, Avg_Open_To_Buy, Total_Trans_Amt))
+
+bank1 <- bank1 %>% dummy_cols(.,
+                    select_columns = NULL,
+                    remove_first_dummy = TRUE,
+                    remove_most_frequent_dummy = FALSE,
+                    ignore_na = FALSE,
+                    split = NULL,
+                    remove_selected_columns = FALSE)
+ 
+bank1 <- bank1 %>% select(-c(Gender, Education_Level, Marital_Status, Income_Category, Card_Category, Total_Trans_Ct))
+```
+
+## Creating PCAs
+```{r}
+pr_bank <- prcomp(x = select(bank1, -Churn), scale = T, center = T)
+
+screeplot(pr_bank, type = "lines")
+```
+
+```{r}
+pr_bank$rotation
+
+## pc1 = low credit, high utilization, low log_avg_open_to_buy
+## pc2 = high trans amts/cts
+## pc3 = low utilization, low balance
+## pc4 = young
+
+```
+
+
+
+```{r}
+prc <- bind_cols(select(bank1,Churn),as.data.frame(pr_bank$x))
+
+prc %>% select(Churn, PC2, PC3, PC5, PC6, PC8, PC13, PC14, PC23, PC25, PC26, PC32, PC34) %>%
+  pivot_longer(cols = -Churn,names_to = "component",values_to = "loading") %>%
+  ggplot(aes(loading, fill = as.factor(Churn))) + geom_density(alpha=0.5)+
+  facet_grid(.~component)
+```
+
+## GLM
+```{r}
+bank2 <- prc %>% select(Churn, PC2, PC3, PC14, PC23, PC5)
+
+set.seed(504)
+
+train_index <- createDataPartition(bank2$Churn, p = 0.6, list = FALSE)
+train <- bank2[train_index, ]
+test <- bank2[-train_index, ]
+
+fit <- train(Churn ~ .,
+             data = train, 
+             trControl = trainControl(method = "cv", number = 5),
+             method = "glm",
+             family = "binomial")
+
+prob <- predict(fit, newdata = test)
+pred <- if_else(prob > 0.5, 1, 0)
+ 
+confusionMatrix(predict(fit, test), factor(test$Churn))
+```
+
+## Testing AUC
+```{r}
+library(pROC)
+myRoc <- roc(as.numeric(test$Churn), as.numeric(prob))
+
+auc(myRoc)
+plot(myRoc)
+```
+
+## Naive Bayes
+```{r}
+bank2$Churn <- as.factor(bank2$Churn)
+
+set.seed(504)
+
+train_index2 <- createDataPartition(bank2$Churn, p = 0.6, list = FALSE)
+train2 <- bank2[train_index2, ]
+test2 <- bank2[-train_index2, ]
+
+fit2 <- train(Churn ~ .,
+             data = train2, 
+             trControl = trainControl(method = "cv", number = 5),
+             method = "naive_bayes",
+             metric = "Accuracy")
+
+prob2 <- predict(fit2, newdata=test2)
+#pred2 <- ifelse(prob2 > 0.5, 1, 0)
+ 
+confusionMatrix(predict(fit2,test2), factor(test2$Churn))
+```
+
+```{r}
+myRoc <- roc(as.numeric(test2$Churn), as.numeric(prob2))
+
+auc(myRoc)
+plot(myRoc)
+```
